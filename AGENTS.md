@@ -41,6 +41,9 @@ Never "Account", "Audience", or "Site" in APIs or docs.
   cookie), and use every pending record once.
 - PKCE S256 only. Public clients only.
 - No OpenID Connect discovery, no `id_token`.
+- `secret` is 64 hex characters (32 random bytes) from a machine. Do not
+  loosen `secretProblem` to a length check or accept a passphrase: access
+  tokens can be tested offline against a guessed secret.
 - Access tokens are bound to one resource. Hosts must not forward them
   upstream.
 

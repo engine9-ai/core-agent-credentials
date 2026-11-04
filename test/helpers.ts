@@ -4,6 +4,7 @@ import { bytesToBase64Url, encodeJson, randomToken, sha256Base64Url } from '../s
 import { memoryStore } from '../src/stores/memory';
 import type { AgentCredentialEvent, AgentCredentialsOptions, AgentCredentialStore } from '../src/types';
 
+export const SECRET = '0123456789abcdef'.repeat(4);
 export const ISSUER = 'https://www.example.com';
 export const DOMAIN = 'www.example.com';
 export const MCP = 'https://www.example.com/mcp';
@@ -78,7 +79,7 @@ export function setup(overrides: Partial<AgentCredentialsOptions> = {}): Harness
   harness.agents = createAgentCredentials({
     issuer: ISSUER,
     resources: [MCP],
-    secret: 's'.repeat(32),
+    secret: SECRET,
     store,
     scopes: { 'people:read': 'See people and their history', 'people:write': 'Add and change people' },
     delegate: { jwks: JWKS },

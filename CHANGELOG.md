@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.1
+
+`secret` must be 32 random bytes as 64 hex characters. Until now any 32
+characters passed, so `this is a secret this is a secret` was accepted.
+Anyone who connects an Agent holds an access token signed with the secret
+and can test guesses against it offline; a typed value let them mint access
+for any person with any scope. `createAgentCredentials` now throws on any
+other form, naming the entry (`secret[1]`) when a rotation list has a bad one.
+
+| What a site changes | |
+| --- | --- |
+| `AGENT_CREDENTIALS_SECRET` | Run `npx e9core setup-keys` (and `--remote`) with an `@engine9/core` that writes it; it replaces a typed value. On your own servers, `openssl rand -hex 32` |
+| Tests | A fixture such as `'s'.repeat(32)` throws. Use a 64-hex value |
+
 ## 0.1.0
 
 First release.

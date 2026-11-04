@@ -40,7 +40,11 @@ export interface AgentCredentialsOptions {
   issuer: string;
   /** Resources an Agent Credential may be bound to (RFC 8707), e.g. `https://www.example.com/mcp`. */
   resources: string[];
-  /** HMAC secret(s) for access tokens, at least 32 characters. The first signs; all verify. */
+  /**
+   * HMAC secret(s) for access tokens: 32 random bytes as 64 hex characters,
+   * as `e9core setup-keys` writes `AGENT_CREDENTIALS_SECRET`. Anything else
+   * throws. The first signs; all verify.
+   */
   secret: string | string[];
   store: AgentCredentialStore;
   /** Every scope an Agent may ask for, in plain words for the consent screen. */

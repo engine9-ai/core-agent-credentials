@@ -64,7 +64,7 @@ function agentsFor(env) {
   return (agents ??= createAgentCredentials({
     issuer: 'https://www.example.com',
     resources: ['https://www.example.com/mcp'],
-    secret: env.AGENT_CREDENTIALS_SECRET, // 32+ random bytes, its own secret
+    secret: env.AGENT_CREDENTIALS_SECRET, // npx e9core setup-keys writes it; never type one
     store: sqlStore(d1Executor(env.DB)),
     scopes: {
       'people:read': 'See people and their history',
@@ -147,7 +147,7 @@ for it at once.
 | --- | --- | --- |
 | `issuer` | required | Your origin, no path. Also the Delegate Domain (`host` or `host:port`). |
 | `resources` | required | The URLs tokens may be bound to. |
-| `secret` | required | 32+ characters. Pass `[new, old]` to rotate: the first signs, all verify. |
+| `secret` | required | 32 random bytes as 64 hex characters. `npx e9core setup-keys` writes `AGENT_CREDENTIALS_SECRET` (and `--remote` stores a separate one per Cloudflare environment); on your own servers use `openssl rand -hex 32`. Anything else throws: a phrase can be guessed offline from any access token. Pass `[new, old]` to rotate: the first signs, all verify. |
 | `store` | required | `sqlStore(executor)` or `memoryStore()` (tests). |
 | `scopes` | required | Every scope an agent may hold, in plain words. Do not list `admin` unless you mean it. |
 | `defaultScopes` | all scopes | Used when the agent asks for none. |

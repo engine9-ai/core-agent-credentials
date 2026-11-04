@@ -7,7 +7,7 @@ import {
   redirectUriProblem,
 } from './clients';
 import type { ResolvedClient } from './clients';
-import { randomToken, safeEqual, sha256Base64Url } from './crypto';
+import { randomToken, safeEqual, secretProblem, sha256Base64Url } from './crypto';
 import { createIdentityVerifier } from './delegate';
 import {
   CORS_HEADERS,
@@ -148,8 +148,14 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
   if (resources.length === 0) throw new Error('resources must list at least one resource');
 
   const secrets = Array.isArray(options.secret) ? options.secret : [options.secret];
-  if (secrets.length === 0 || secrets.some((s) => typeof s !== 'string' || s.length < 32)) {
-    throw new Error('secret must be at least 32 characters');
+  if (secrets.length === 0) throw new Error('secret must list at least one secret');
+  for (const [i, s] of secrets.entries()) {
+    const problem = secretProblem(s);
+    if (problem) {
+      throw new Error(
+        `secret${secrets.length > 1 ? `[${i}]` : ''} (AGENT_CREDENTIALS_SECRET) ${problem}. Do not choose one: npx e9core setup-keys writes one to .env, and setup-keys --remote gives each Cloudflare environment its own. On your own servers, use the output of openssl rand -hex 32.`
+      );
+    }
   }
 
   const scopeWords = options.scopes;

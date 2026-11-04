@@ -4,6 +4,7 @@ import {
   CLAUDE_ID,
   CLAUDE_REDIRECT,
   ISSUER,
+  SECRET,
   agentRedirect,
   authorizePath,
   claudeMetadata,
@@ -180,7 +181,11 @@ describe('Dynamic Client Registration', () => {
 
 describe('configuration', () => {
   it('rejects a short secret, a path on the issuer, and an unknown default scope', () => {
-    expect(() => setup({ secret: 'short' })).toThrow(/32/);
+    expect(() => setup({ secret: 'short' })).toThrow(/64 hex characters/);
+    expect(() => setup({ secret: 'this is a secret this is a secret' })).toThrow(/64 hex characters/);
+    expect(() => setup({ secret: 'deadbeef'.repeat(8) })).toThrow(/too few characters/);
+    expect(() => setup({ secret: [SECRET, 'I am god'] })).toThrow(/secret\[1\]/);
+    expect(() => setup({ secret: SECRET.toUpperCase() })).not.toThrow();
     expect(() => setup({ issuer: 'https://www.example.com/app' })).toThrow(/origin/);
     expect(() => setup({ issuer: 'http://www.example.com' })).toThrow(/https/);
     expect(() => setup({ defaultScopes: ['admin'] })).toThrow(/unknown scope/);

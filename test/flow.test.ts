@@ -7,6 +7,7 @@ import {
   DOMAIN,
   ISSUER,
   MCP,
+  SECRET,
   SUB,
   agentRedirect,
   authorizePath,
@@ -420,14 +421,14 @@ describe('authenticate', () => {
     const [body, sig] = tokens.access_token.split('.');
     const altered = `${body.slice(0, -2)}AA.${sig}`;
     expect((await h.agents.authenticate(bearer(altered))).ok).toBe(false);
-    const other = setup({ secret: 'o'.repeat(32) });
+    const other = setup({ secret: 'fedcba9876543210'.repeat(4) });
     expect((await other.agents.authenticate(bearer(tokens.access_token))).ok).toBe(false);
   });
 
   it('accepts tokens signed with an older secret during rotation', async () => {
     const h = setup();
     const { tokens } = await connect(h);
-    const rotated = setup({ secret: ['n'.repeat(32), 's'.repeat(32)], store: h.store });
+    const rotated = setup({ secret: ['00112233445566778899aabbccddeeff'.repeat(2), SECRET], store: h.store });
     expect((await rotated.agents.authenticate(bearer(tokens.access_token))).ok).toBe(true);
   });
 
