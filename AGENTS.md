@@ -38,7 +38,10 @@ Never "Account", "Audience", or "Site" in APIs or docs.
 - Never skip the consent screen for an Agent the person has not approved for
   these scopes and this redirect URI.
 - Bind every flow to the browser that started it (the `e9_agent_flow`
-  cookie), and use every pending record once.
+  cookie, up to five flows per browser), and use every pending record once.
+  A sign-in that returns to another browser is never finished as it is: it
+  offers "Continue in this browser", which starts a new flow bound there and
+  always shows consent with a warning.
 - PKCE S256 only. Public clients only.
 - No OpenID Connect discovery, no `id_token`.
 - `secret` is 64 hex characters (32 random bytes) from a machine. Do not

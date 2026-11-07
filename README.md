@@ -44,6 +44,16 @@ is and never mints roles.
 7. Each MCP request calls `authenticate`. You get the person's Identity
    Token claims and the approved scopes, and you decide.
 
+### Phones, several tabs, and other browsers
+
+Each attempt is bound to the browser that started it (the `e9_agent_flow` cookie, which holds up to five
+attempts, so tapping Connect twice does not break the first tab). If Delegate's sign-in comes back to a
+different browser (common on phones, when a link opens in another app), the person is not turned away and the
+flow is not finished as it is: they see **Continue in this browser?**, and continuing starts a new attempt
+bound to that browser, signs in again and always shows the consent screen with a warning. That is no more than
+anyone could do by sending them the agent's authorize link. An attempt that took longer than 15 minutes says
+it expired.
+
 The consent screen is skipped next time, unless one of these happens:
 
 - the agent asks for scopes the person has not approved;
@@ -167,6 +177,7 @@ for it at once.
 | GET | `/.well-known/oauth-protected-resource/<path>` | RFC 9728, for each resource on the issuer origin. For a resource elsewhere, serve `protectedResourceMetadata(resource)` there yourself. |
 | GET | `/oauth/authorize` | Authorization code + PKCE S256 |
 | GET | `/oauth/callback` | Delegate returns here |
+| GET | `/oauth/resume` | "Continue in this browser": restarts an attempt that came back to another browser |
 | POST | `/oauth/consent` | The consent screen posts here |
 | POST | `/oauth/token` | `authorization_code`, `refresh_token` |
 | POST | `/oauth/revoke` | RFC 7009. Ends the Connection. |
@@ -212,6 +223,32 @@ SQLite, MySQL, or a core `SQLWorker` the same way.
 Tables: `agent_pending`, `agent_connection`, `agent_refresh`,
 `agent_client`. Times are unix seconds. Call `prune()` on a schedule to
 delete expired rows.
+
+## Connecting Claude
+
+Claude adds an MCP server as a **custom connector**, and works with this library as it is:
+
+1. claude.ai → **Customize → Connectors → + Add → Add custom connector** (on some plans: Add → Custom → Web).
+   It is not under Settings; Settings' "Allowed sites" list is for Claude in Chrome. Works from a phone browser.
+2. Name it and give the resource URL, e.g. `https://www.example.com/mcp`.
+3. **Authentication:** "Sign in when needed". **OAuth client:** "Use Claude's published identity
+   (Recommended)": a Client ID Metadata Document, accepted by default. "Register automatically" needs
+   `registration.dynamic: true`.
+4. **Connect**, sign in with Delegate, approve on the consent screen. In a chat, turn it on under
+   **+ → Connectors**. Claude connects from Anthropic's cloud, so the URL must be public.
+
+What hosts get wrong (found wiring Folio, folio.engine9.ai):
+
+- **The email is `credential.identity.fields.email`**, not `identity.email`. `authenticate()` returns the
+  Identity Token claims as `{ sub, level, fields }`. Reading the wrong key refuses every agent.
+- **Claude asks for no scope**, so it gets `defaultScopes` (default: every scope). Set it deliberately; each
+  default is still a checkbox the person can untick.
+- **A new scope needs a reconnect.** Refreshing a token never widens it. People must Disconnect and Connect
+  again; the consent screen marks the new scope.
+- **Codes live 60 seconds.** Fine for Claude; a client that needs a person to copy a code by hand will miss it.
+- **Smoke test each deploy:** `GET /.well-known/oauth-protected-resource/mcp`,
+  `GET /.well-known/oauth-authorization-server` (check `scopes_supported`, and `registration_endpoint` if
+  dynamic registration is on), and `POST /mcp` without a token must answer 401.
 
 ## License
 

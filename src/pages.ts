@@ -2,6 +2,7 @@ import type { ResolvedClient } from './clients';
 import { escapeHtml } from './http';
 
 const STYLE = `
+:root{color-scheme:light}
 *{box-sizing:border-box}
 body{margin:0;font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:#1d1d1f;background:#f4f4f6}
 main{max-width:30rem;margin:3rem auto;padding:2rem;background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.12)}
@@ -15,8 +16,8 @@ label{display:flex;gap:.6rem;align-items:flex-start;padding:.4rem 0}
 label small{display:block;color:#666;font-family:ui-monospace,monospace;font-size:.8rem}
 .new{color:#a15c00;font-size:.8rem;font-weight:600}
 .actions{display:flex;gap:.75rem;justify-content:flex-end;margin-top:1.5rem}
-button{font:inherit;padding:.6rem 1.2rem;border-radius:8px;border:1px solid #bbb;background:#fff;cursor:pointer}
-button[value=allow]{background:#1d1d1f;color:#fff;border-color:#1d1d1f}
+button,.button{font:inherit;padding:.6rem 1.2rem;border-radius:8px;border:1px solid #bbb;background:#fff;color:#1d1d1f;cursor:pointer;text-decoration:none;display:inline-block;-webkit-appearance:none;appearance:none}
+button[value=allow],.button.primary{background:#1d1d1f;color:#fff;border-color:#1d1d1f}
 .fine{color:#666;font-size:.85rem;margin-top:1.5rem}
 `;
 
@@ -67,6 +68,20 @@ export interface ConsentPageInput {
   flowId: string;
   action: string;
   maxAgeDays: number;
+  /** The flow was started in another browser or tab and continued here (see `resume`). */
+  resumed?: boolean;
+}
+
+/** A sign-in came back to a browser that did not start it. Offer to continue here, never automatically. */
+export function continueHerePage(input: { domain: string; agentName: string; continueUrl: string }): string {
+  const domain = escapeHtml(input.domain);
+  return page(
+    'Continue in this browser?',
+    `<h1>Continue connecting in this browser?</h1>
+<p>This sign-in was started in a different browser or tab, for example when a link opens in another app on a phone.</p>
+<p class="warn">Only continue if you started connecting <strong>${escapeHtml(input.agentName)}</strong> to ${domain} yourself in the last few minutes. You will sign in again, then choose what it may do.</p>
+<div class="actions"><a class="button primary" href="${escapeHtml(input.continueUrl)}">Continue here</a></div>`,
+  );
 }
 
 export function consentPage(input: ConsentPageInput): string {
@@ -85,6 +100,7 @@ export function consentPage(input: ConsentPageInput): string {
     `<h1>${agent.name} wants to act as you on ${domain}</h1>
 <p class="who">Signed in as <strong>${escapeHtml(input.person)}</strong></p>
 ${agent.warning ? `<p class="warn">${agent.warning}</p>` : ''}
+${input.resumed ? `<p class="warn">This connection was started in another browser or tab. Only allow it if you started it yourself just now.</p>` : ''}
 <form method="post" action="${escapeHtml(input.action)}">
 <input type="hidden" name="flow" value="${escapeHtml(input.flowId)}">
 <fieldset><legend>It will be able to</legend>${scopes}</fieldset>

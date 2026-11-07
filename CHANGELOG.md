@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.1.0
+
+Connecting from a phone no longer fails with "opened in a different browser, or it took too long".
+
+- **Several attempts per browser.** The `e9_agent_flow` cookie holds up to five flows, so tapping Connect
+  twice no longer breaks the first tab.
+- **Sign-in returning to another browser** (a link opened in another app) now offers **Continue in this
+  browser**: a new flow bound to that browser (`GET /oauth/resume`), a fresh Delegate sign-in, and always the
+  consent screen with a warning. Nothing is finished without the person choosing to.
+- **Separate messages** for an expired attempt and an approval page from another browser.
+- **Consent page buttons** have an explicit text colour and `color-scheme: light`, so Cancel is visible
+  in dark mode on iOS.
+- README: "Connecting Claude", including `identity.fields.email`.
+- `npm run build` runs on install from git (`prepare`), so hosts can depend on `github:engine9-ai/core-agent-credentials`.
+
+| What a site changes | |
+| --- | --- |
+| Nothing | Hosts that route `/oauth/*` to `handle()` get `/oauth/resume` automatically |
+
 ## 1.0.1
 
 `secret` must be 32 random bytes as 64 hex characters. Until now any 32

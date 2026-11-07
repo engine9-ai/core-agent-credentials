@@ -21,7 +21,7 @@ import {
   readJsonObject,
   redirect,
 } from './http';
-import { consentPage, errorPage } from './pages';
+import { consentPage, continueHerePage, errorPage } from './pages';
 import {
   hashRefreshToken,
   isAccessToken,
@@ -40,6 +40,8 @@ import type {
 
 export const DEFAULT_DELEGATE_URL = 'https://delegate.network';
 const FLOW_COOKIE = 'e9_agent_flow';
+/** Flows one browser may have open at once (tapping Connect twice must not break the first tab). */
+const MAX_FLOWS_PER_BROWSER = 5;
 const FLOW_TTL_SECONDS = 15 * 60;
 const CODE_TTL_SECONDS = 60;
 const SCOPE_TOKEN = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
@@ -76,6 +78,8 @@ interface FlowData {
   resource: string;
   nonce: string;
   identity?: AgentIdentity;
+  /** Continued in a browser other than the one that started it: always ask for consent, with a warning. */
+  resumed?: boolean;
 }
 
 interface CodeData {
@@ -212,7 +216,17 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
   const endpoint = (name: string) => `${issuer}${basePath}/${name}`;
   const flowCookie = (value: string, age = FLOW_TTL_SECONDS) =>
     cookie(FLOW_COOKIE, value, { path: basePath, maxAge: age, secure });
-  const clearFlowCookie = () => flowCookie('', 0);
+  // The cookie holds the ids of the flows this browser started, newest first, space separated.
+  const boundFlows = (request: Request): string[] =>
+    (readCookie(request, FLOW_COOKIE) ?? '').split(' ').filter((id) => /^[A-Za-z0-9_-]{16,128}$/.test(id));
+  const isBound = (request: Request, id: string | null | undefined): boolean =>
+    Boolean(id) && boundFlows(request).some((b) => safeEqual(b, id as string));
+  const bindFlow = (request: Request, id: string, drop?: string): string =>
+    flowCookie([id, ...boundFlows(request).filter((b) => b !== id && b !== drop)].slice(0, MAX_FLOWS_PER_BROWSER).join(' '));
+  const unbindFlow = (request: Request, id: string): string => {
+    const rest = boundFlows(request).filter((b) => b !== id);
+    return rest.length ? flowCookie(rest.join(' ')) : flowCookie('', 0);
+  };
 
   async function emit(event: AgentCredentialEvent): Promise<void> {
     if (!options.onEvent) return;
@@ -321,7 +335,7 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
     return identity.fields?.email ?? identity.fields?.display_name ?? `your ${domain} account`;
   }
 
-  async function issueCode(connection: Connection, flow: FlowData, scopes: string[]): Promise<Response> {
+  async function issueCode(connection: Connection, flow: FlowData, scopes: string[], cookies: string[]): Promise<Response> {
     const code = randomToken(32);
     const data: CodeData = {
       connection_id: connection.id,
@@ -332,10 +346,10 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
       resource: flow.resource,
     };
     await store.putPending({ id: code, kind: 'code', data: { ...data }, expires_at: now() + CODE_TTL_SECONDS }, now());
-    return redirect(withParams(flow.redirect_uri, { code, state: flow.state, iss: issuer }), [clearFlowCookie()]);
+    return redirect(withParams(flow.redirect_uri, { code, state: flow.state, iss: issuer }), cookies);
   }
 
-  async function authorize(url: URL): Promise<Response> {
+  async function authorize(request: Request, url: URL): Promise<Response> {
     const q = url.searchParams;
     const clientId = q.get('client_id');
     if (!clientId) return problemPage('This agent cannot connect', 'The request did not say which agent is asking.');
@@ -375,8 +389,7 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
     const scopes = scopeParam.length === 0 ? defaultScopes : [...new Set(scopeParam.filter((s) => s in scopeWords))];
     if (scopes.length === 0) return backToAgent(flow, 'invalid_scope', 'None of the requested scopes exist here');
 
-    const id = randomToken(32);
-    const data: FlowData = {
+    return toDelegate(request, {
       client_id: client.client_id,
       redirect_uri: redirectUri,
       state: flow.state,
@@ -384,7 +397,12 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
       scopes,
       resource,
       nonce: randomToken(16),
-    };
+    });
+  }
+
+  /** Store an authorize flow, bind it to this browser and send the person to Delegate. */
+  async function toDelegate(request: Request, data: FlowData, drop?: string): Promise<Response> {
+    const id = randomToken(32);
     await store.putPending({ id, kind: 'authorize', data: { ...data }, expires_at: now() + FLOW_TTL_SECONDS }, now());
     const signIn = authorizeUrl({
       delegateUrl,
@@ -400,22 +418,51 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
       state: id,
       responseMode: 'query',
     });
-    return redirect(signIn, [flowCookie(id)]);
+    return redirect(signIn, [bindFlow(request, id, drop)]);
   }
 
-  const restartMessage =
-    'This step was opened in a different browser, or it took too long. Go back to the agent and connect again.';
+  const expiredMessage = `This sign-in expired (each attempt lasts ${FLOW_TTL_SECONDS / 60} minutes) or was already used. Go back to the agent and connect again.`;
+
+  /**
+   * The sign-in came back to a browser that did not start it (a link opened in another app, another browser, or
+   * a cleared cookie). The flow is never finished here as it is: the person is asked whether to continue, and if
+   * so a new flow starts in this browser (bound to it), signs in again and always shows consent with a warning.
+   * That is no more than anyone could do by sending the person the agent's authorize link.
+   */
+  async function offerToContinue(request: Request, state: string): Promise<Response> {
+    const pending = await store.takePending(state, 'authorize', now());
+    if (!pending) return problemPage('Sign-in cannot continue', expiredMessage, [unbindFlow(request, state)]);
+    const flow = pending.data as unknown as FlowData;
+    const resolved = await resolver.resolve(flow.client_id);
+    if ('problem' in resolved || !stillRegistered(resolved.client, flow.redirect_uri)) {
+      return problemPage('This agent cannot connect', `The agent ${flow.client_id} changed its registration. Connect it again.`);
+    }
+    const resumeId = randomToken(32);
+    await store.putPending(
+      { id: resumeId, kind: 'authorize', data: { ...flow, nonce: randomToken(16), resumed: true }, expires_at: now() + FLOW_TTL_SECONDS },
+      now(),
+    );
+    const client = resolved.client;
+    const agentName = client.client_name ?? (client.kind === 'metadata' ? new URL(client.client_id).host : client.client_id);
+    return html(continueHerePage({ domain, agentName, continueUrl: `${endpoint('resume')}?flow=${encodeURIComponent(resumeId)}` }), 400);
+  }
+
+  /** "Continue here": start the stored flow again in this browser. */
+  async function resume(request: Request, url: URL): Promise<Response> {
+    const id = url.searchParams.get('flow');
+    const pending = id ? await store.takePending(id, 'authorize', now()) : null;
+    if (!pending || !(pending.data as { resumed?: boolean }).resumed) return problemPage('Sign-in cannot continue', expiredMessage);
+    return toDelegate(request, { ...(pending.data as unknown as FlowData), nonce: randomToken(16), resumed: true });
+  }
 
   async function callback(request: Request, url: URL): Promise<Response> {
     const state = url.searchParams.get('state');
-    const bound = readCookie(request, FLOW_COOKIE);
-    if (!state || !bound || !safeEqual(state, bound)) {
-      return problemPage('Sign-in cannot continue', restartMessage, [clearFlowCookie()]);
-    }
+    if (!state) return problemPage('Sign-in cannot continue', expiredMessage);
+    if (!isBound(request, state)) return offerToContinue(request, state);
     const pending = await store.takePending(state, 'authorize', now());
-    if (!pending) return problemPage('Sign-in cannot continue', restartMessage, [clearFlowCookie()]);
+    if (!pending) return problemPage('Sign-in cannot continue', expiredMessage, [unbindFlow(request, state)]);
     const flow = pending.data as unknown as FlowData;
-    const clear = [clearFlowCookie()];
+    const clear = [unbindFlow(request, state)];
 
     const delegateError = url.searchParams.get('error');
     if (delegateError) return backToAgent(flow, 'access_denied', `Sign-in did not finish (${delegateError})`, clear);
@@ -444,6 +491,7 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
 
     const existing = await store.findConnection(snapshot.sub, client.client_id, flow.resource, now());
     if (
+      !flow.resumed &&
       existing &&
       redirectUriMatches(existing.redirect_uri, flow.redirect_uri) &&
       flow.scopes.every((s) => existing.scopes.includes(s))
@@ -464,7 +512,7 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
         scopes: connection.scopes,
         at: now(),
       });
-      return issueCode(connection, flow, flow.scopes);
+      return issueCode(connection, flow, flow.scopes, clear);
     }
 
     const flowId = randomToken(32);
@@ -485,21 +533,25 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
       flowId,
       action: endpoint('consent'),
       maxAgeDays: Math.round(maxAge / 86400),
+      resumed: Boolean(flow.resumed),
     });
-    return html(page, 200, [flowCookie(flowId)]);
+    return html(page, 200, [bindFlow(request, flowId, state)]);
   }
 
   async function consent(request: Request): Promise<Response> {
     const form = await readForm(request);
     const flowId = form?.get('flow');
-    const bound = readCookie(request, FLOW_COOKIE);
-    if (!form || !flowId || !bound || !safeEqual(flowId, bound)) {
-      return problemPage('This approval cannot continue', restartMessage, [clearFlowCookie()]);
+    // Consent is never resumed elsewhere: the page was shown in this browser moments ago.
+    if (!form || !flowId || !isBound(request, flowId)) {
+      return problemPage(
+        'This approval cannot continue',
+        'This approval page belongs to another browser or tab, or it expired. Go back to the agent and connect again.',
+      );
     }
     const pending = await store.takePending(flowId, 'consent', now());
-    if (!pending) return problemPage('This approval cannot continue', restartMessage, [clearFlowCookie()]);
+    if (!pending) return problemPage('This approval cannot continue', expiredMessage, [unbindFlow(request, flowId)]);
     const flow = pending.data as unknown as FlowData;
-    const clear = [clearFlowCookie()];
+    const clear = [unbindFlow(request, flowId)];
     if (form.get('decision') !== 'allow' || !flow.identity) {
       return backToAgent(flow, 'access_denied', 'The person did not allow this agent', clear);
     }
@@ -546,7 +598,7 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
       scopes: connection.scopes,
       at,
     });
-    return issueCode(connection, flow, approved);
+    return issueCode(connection, flow, approved, clear);
   }
 
   async function issueTokens(connection: Connection, scopes: string[]): Promise<Response> {
@@ -784,7 +836,8 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
     if (!path.startsWith(`${basePath}/`)) return null;
     const route = path.slice(basePath.length + 1);
 
-    if (route === 'authorize' && method === 'GET') return authorize(url);
+    if (route === 'authorize' && method === 'GET') return authorize(request, url);
+    if (route === 'resume' && method === 'GET') return resume(request, url);
     if (route === 'callback' && method === 'GET') return callback(request, url);
     if (route === 'consent' && method === 'POST') return consent(request);
     if (route === 'token' || route === 'revoke' || (route === 'register' && dynamic)) {
