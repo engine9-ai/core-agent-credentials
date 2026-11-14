@@ -50,7 +50,7 @@ function describeAgent(client: ResolvedClient, redirectUri: string): { name: str
     const name = client.client_name && client.client_name !== host ? `${escapeHtml(client.client_name)} from ` : '';
     return { name: `<strong>${name}${escapeHtml(host)}</strong>`, warning: null };
   }
-  const label = client.client_name ? `an app calling itself “${escapeHtml(client.client_name)}”` : 'an app';
+  const label = client.client_name ? `An app calling itself “${escapeHtml(client.client_name)}”` : 'An app';
   return {
     name: `<strong>${label}</strong>`,
     warning: `This app registered itself, so no one has confirmed who made it. Its access will go to <strong>${escapeHtml(

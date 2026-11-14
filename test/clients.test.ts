@@ -146,7 +146,7 @@ describe('Dynamic Client Registration', () => {
     });
     const page = await returnFromDelegate(h, s);
     const html = await page.text();
-    expect(html).toContain('an app calling itself “Claude”');
+    expect(html).toContain('An app calling itself “Claude”');
     expect(html).toContain('no one has confirmed who made it');
     expect(html).toContain('attacker.example');
 
