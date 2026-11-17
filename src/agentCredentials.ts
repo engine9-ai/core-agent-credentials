@@ -23,6 +23,8 @@ import {
 } from './http';
 import { consentPage, continueHerePage, errorPage } from './pages';
 import {
+  ACCESS_TOKEN_TYPE,
+  TOKEN_EXCHANGE_GRANT,
   hashRefreshToken,
   isAccessToken,
   isRefreshToken,
@@ -30,12 +32,17 @@ import {
   readAccessToken,
   signAccessToken,
 } from './tokens';
+import type { AccessTokenPayload } from './tokens';
 import type {
+  AgentCredential,
   AgentCredentialEvent,
   AgentCredentialsOptions,
   AgentIdentity,
   AuthenticateResult,
+  AuthorizationDetail,
   Connection,
+  TokenExchangeRequest,
+  TokenExchangeResult,
 } from './types';
 
 export const DEFAULT_DELEGATE_URL = 'https://delegate.network';
@@ -47,6 +54,9 @@ const CODE_TTL_SECONDS = 60;
 const SCOPE_TOKEN = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
 const PKCE_CHALLENGE = /^[A-Za-z0-9_-]{43,128}$/;
 const PKCE_VERIFIER = /^[A-Za-z0-9._~-]{43,128}$/;
+/** Limits on `authorization_details` in a token exchange. They travel inside the access token. */
+const MAX_DETAILS = 10;
+const MAX_DETAILS_BYTES = 2048;
 
 export interface AgentCredentials {
   /** Answers this library's routes. Null for any other request, so the host can carry on. */
@@ -67,6 +77,11 @@ export interface AgentCredentials {
   revokeConnection(id: string, options?: { sub?: string }): Promise<boolean>;
   /** Deletes expired rows. Run it on a schedule. */
   prune(): Promise<void>;
+  /**
+   * Token exchange (RFC 8693) without HTTP, for a host that holds the Agent's access token (it arrived on an
+   * MCP request) and hands the new token to the Agent in a tool result. Same checks as `POST {basePath}/token`.
+   */
+  exchangeToken(request: TokenExchangeRequest): Promise<TokenExchangeResult>;
 }
 
 interface FlowData {
@@ -186,6 +201,14 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
   const nowMs = options.now ?? (() => Date.now());
   const now = () => Math.floor(nowMs() / 1000);
   const dynamic = options.registration?.dynamic ?? false;
+  const detailHandlers = options.authorizationDetails ?? {};
+  const detailTypes = Object.keys(detailHandlers);
+  for (const type of detailTypes) {
+    if (!type || typeof detailHandlers[type]?.check !== 'function') {
+      throw new Error(`authorizationDetails ${JSON.stringify(type)} needs a check function`);
+    }
+  }
+  const exchangeOn = detailTypes.length > 0;
   const metadataDocuments = options.registration?.metadataDocuments ?? true;
 
   for (const client of options.registration?.clients ?? []) {
@@ -296,7 +319,8 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
       scopes_supported: scopeNames,
       response_types_supported: ['code'],
       response_modes_supported: ['query'],
-      grant_types_supported: ['authorization_code', 'refresh_token'],
+      grant_types_supported: ['authorization_code', 'refresh_token', ...(exchangeOn ? [TOKEN_EXCHANGE_GRANT] : [])],
+      ...(exchangeOn ? { authorization_details_types_supported: detailTypes } : {}),
       code_challenge_methods_supported: ['S256'],
       token_endpoint_auth_methods_supported: ['none'],
       revocation_endpoint_auth_methods_supported: ['none'],
@@ -642,6 +666,157 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
     );
   }
 
+  function credentialFrom(payload: AccessTokenPayload, connection: Connection): AgentCredential {
+    return {
+      connectionId: connection.id,
+      clientId: payload.client_id,
+      clientName: payload.client_name,
+      resource: payload.resource,
+      // A person who narrows a Connection narrows tokens already issued.
+      scopes: payload.scope.split(' ').filter((s) => connection.scopes.includes(s)),
+      identity: payload.identity,
+      connectedAt: payload.connected_at,
+      expiresAt: payload.exp,
+      ...(payload.authorization_details ? { authorizationDetails: payload.authorization_details } : {}),
+    };
+  }
+
+  /** The earliest time any detail's approval ends, or null when the host refuses one (or a handler throws). */
+  async function approvedUntil(details: AuthorizationDetail[], credential: AgentCredential): Promise<number | null> {
+    let until = Number.POSITIVE_INFINITY;
+    for (const detail of details) {
+      const handler = detailHandlers[detail.type];
+      if (!handler) return null;
+      let end: number | null;
+      try {
+        end = await handler.check(detail, credential);
+      } catch (error) {
+        console.error('core-agent-credentials authorizationDetails check failed', error);
+        return null;
+      }
+      if (typeof end !== 'number' || !Number.isFinite(end)) return null;
+      until = Math.min(until, Math.floor(end));
+    }
+    return until;
+  }
+
+  /** Parses and bounds `authorization_details`. Members other than `type` are the host's to check. */
+  function parseDetails(value: unknown): AuthorizationDetail[] | string {
+    let details = value;
+    if (typeof value === 'string') {
+      if (value.length > MAX_DETAILS_BYTES) return `authorization_details may be at most ${MAX_DETAILS_BYTES} bytes`;
+      try {
+        details = JSON.parse(value);
+      } catch {
+        return 'authorization_details must be a JSON array';
+      }
+    }
+    if (!Array.isArray(details) || details.length === 0 || details.length > MAX_DETAILS) {
+      return `authorization_details must list 1 to ${MAX_DETAILS} objects`;
+    }
+    if (JSON.stringify(details).length > MAX_DETAILS_BYTES) return `authorization_details may be at most ${MAX_DETAILS_BYTES} bytes`;
+    for (const d of details) {
+      if (!d || typeof d !== 'object' || Array.isArray(d) || typeof (d as AuthorizationDetail).type !== 'string') {
+        return 'Each authorization detail is an object with a type';
+      }
+      if (!((d as AuthorizationDetail).type in detailHandlers)) {
+        return `Unknown authorization_details type ${(d as AuthorizationDetail).type}`;
+      }
+    }
+    return details as AuthorizationDetail[];
+  }
+
+  /**
+   * RFC 8693: trade an Agent Credential's access token for a short-lived one bound to `resource`, carrying
+   * `authorization_details` a person approved in the host. Never more scopes, never a refresh token, never past
+   * the approval, the Connection, or the access token lifetime. A token that came from an exchange cannot be
+   * exchanged again.
+   */
+  async function exchangeToken(request: TokenExchangeRequest): Promise<TokenExchangeResult> {
+    const fail = (error: Extract<TokenExchangeResult, { ok: false }>['error'], description: string): TokenExchangeResult => ({ ok: false, error, description });
+    if (!exchangeOn) return fail('unsupported_grant_type', 'This Domain does not offer token exchange');
+    if (typeof request.subjectToken !== 'string' || !isAccessToken(request.subjectToken)) {
+      return fail('invalid_request', 'subject_token must be an Agent Credential access token');
+    }
+    const payload = await readAccessToken(request.subjectToken, secrets);
+    const at = now();
+    if (!payload || payload.exp <= at) return fail('invalid_grant', 'The subject token is not valid or has expired');
+    if (payload.authorization_details) {
+      return fail('invalid_grant', 'Exchange the Agent Credential itself, not a token that came from an exchange');
+    }
+    if (request.clientId != null && request.clientId !== payload.client_id) {
+      return fail('invalid_grant', 'The subject token was issued to another client');
+    }
+    const connection = await store.getConnection(payload.cid);
+    if (!isActive(connection, at)) return fail('invalid_grant', 'The connection has ended');
+    const resource = typeof request.resource === 'string' ? normalizeResource(request.resource) : null;
+    if (!resource || !resources.includes(resource)) return fail('invalid_target', 'resource must be one this Domain serves');
+    const details = parseDetails(request.authorizationDetails);
+    if (typeof details === 'string') return fail('invalid_authorization_details', details);
+    const subject = credentialFrom(payload, connection);
+    let scopes = subject.scopes;
+    if (request.scope) {
+      const asked = request.scope.split(' ').filter(Boolean);
+      if (!asked.every((s) => subject.scopes.includes(s))) return fail('invalid_scope', 'A token exchange cannot add scopes');
+      scopes = asked;
+    }
+    if (scopes.length === 0) return fail('invalid_scope', 'No approved scope is still available');
+    const until = await approvedUntil(details, subject);
+    const exp = Math.min(at + accessTtl, connection.expires_at, until ?? 0);
+    if (until === null || exp <= at) {
+      return fail('invalid_authorization_details', 'A person has not approved these authorization_details, or the approval has ended');
+    }
+    const accessToken = await signAccessToken(
+      {
+        cid: connection.id,
+        client_id: payload.client_id,
+        client_name: payload.client_name,
+        resource,
+        scope: scopes.join(' '),
+        identity: payload.identity,
+        connected_at: payload.connected_at,
+        iat: at,
+        exp,
+        authorization_details: details,
+      },
+      secrets[0],
+    );
+    return {
+      ok: true,
+      token: {
+        access_token: accessToken,
+        issued_token_type: ACCESS_TOKEN_TYPE,
+        token_type: 'Bearer',
+        expires_in: exp - at,
+        scope: scopes.join(' '),
+        authorization_details: details,
+      },
+    };
+  }
+
+  async function exchangeFromForm(form: URLSearchParams): Promise<Response> {
+    if (!exchangeOn) return oauthError('unsupported_grant_type', 'Use authorization_code or refresh_token');
+    const subjectType = form.get('subject_token_type');
+    if (subjectType !== ACCESS_TOKEN_TYPE) {
+      return oauthError('invalid_request', `subject_token_type must be ${ACCESS_TOKEN_TYPE}`);
+    }
+    const requested = form.get('requested_token_type');
+    if (requested !== null && requested !== ACCESS_TOKEN_TYPE) {
+      return oauthError('invalid_request', `requested_token_type may only be ${ACCESS_TOKEN_TYPE}`);
+    }
+    if (form.get('actor_token') !== null) return oauthError('invalid_request', 'actor_token is not supported');
+    if (form.getAll('resource').length !== 1) return oauthError('invalid_target', 'Give exactly one resource');
+    const result = await exchangeToken({
+      subjectToken: form.get('subject_token') ?? '',
+      resource: form.get('resource') ?? '',
+      authorizationDetails: (form.get('authorization_details') ?? '') as unknown as AuthorizationDetail[],
+      scope: form.get('scope') ?? undefined,
+      clientId: form.get('client_id') ?? undefined,
+    });
+    if (!result.ok) return oauthError(result.error, result.description);
+    return json(result.token, 200, CORS_HEADERS);
+  }
+
   async function revokeForReuse(connectionId: string): Promise<void> {
     const connection = await store.getConnection(connectionId);
     if (connection && (await store.revokeConnection(connectionId, now()))) {
@@ -721,7 +896,9 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
       return issueTokens(connection, scopes);
     }
 
-    return oauthError('unsupported_grant_type', 'Use authorization_code or refresh_token');
+    if (grantType === TOKEN_EXCHANGE_GRANT) return exchangeFromForm(form);
+
+    return oauthError('unsupported_grant_type', exchangeOn ? 'Use authorization_code, refresh_token or token exchange' : 'Use authorization_code or refresh_token');
   }
 
   async function revoke(request: Request): Promise<Response> {
@@ -738,6 +915,24 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
       ownerClient = record?.client_id ?? null;
     } else if (isAccessToken(value)) {
       const payload = await readAccessToken(value, secrets);
+      if (payload?.authorization_details) {
+        // A token from an exchange: end the host's approval it carries, not the person's whole Connection.
+        if (clientId !== null && clientId !== payload.client_id) {
+          return oauthError('unauthorized_client', 'The token was issued to another client');
+        }
+        const connection = await store.getConnection(payload.cid);
+        if (connection) {
+          const credential = credentialFrom(payload, connection);
+          for (const detail of payload.authorization_details) {
+            try {
+              await detailHandlers[detail.type]?.revoke?.(detail, credential);
+            } catch (error) {
+              console.error('core-agent-credentials authorizationDetails revoke failed', error);
+            }
+          }
+        }
+        return ok();
+      }
       connectionId = payload?.cid ?? null;
       ownerClient = payload?.client_id ?? null;
     }
@@ -861,6 +1056,7 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
     const invalid = (description: string): AuthenticateResult => ({
       ok: false,
       error: 'invalid_token',
+      description,
       response: unauthorized(target, { error: 'invalid_token', description }),
     });
     const payload = await readAccessToken(match[1], secrets);
@@ -870,20 +1066,12 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
     if (payload.resource !== target) return invalid('The agent credential is for another resource');
     const connection = await store.getConnection(payload.cid);
     if (!isActive(connection, at)) return invalid('The connection has ended');
-    return {
-      ok: true,
-      credential: {
-        connectionId: connection.id,
-        clientId: payload.client_id,
-        clientName: payload.client_name,
-        resource: payload.resource,
-        // A person who narrows a Connection narrows tokens already issued.
-        scopes: payload.scope.split(' ').filter((s) => connection.scopes.includes(s)),
-        identity: payload.identity,
-        connectedAt: payload.connected_at,
-        expiresAt: payload.exp,
-      },
-    };
+    const credential = credentialFrom(payload, connection);
+    if (payload.authorization_details) {
+      const until = await approvedUntil(payload.authorization_details, credential);
+      if (until === null || until <= at) return invalid('The approval this credential carries has ended');
+    }
+    return { ok: true, credential };
   }
 
   return {
@@ -912,5 +1100,6 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
       return revoked;
     },
     prune: () => store.prune(now()),
+    exchangeToken,
   };
 }

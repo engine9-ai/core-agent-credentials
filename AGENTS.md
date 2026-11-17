@@ -16,6 +16,12 @@ resource, with which approved scopes**. It never decides what they may do.
 - Do not add an endpoint that issues a credential without a person's
   approval (no `client_credentials`, no password grant). Operators and
   automation use the host's API keys.
+- Token exchange (RFC 8693) is the one way to get a narrower, shorter token,
+  and only when the host names `authorizationDetails` types. The host
+  approves each detail with a person and `check`s it on the exchange and on
+  every `authenticate`; this library never reads a detail beyond `type`.
+  Never more scopes, never a refresh token, never past the approval or the
+  Connection, never exchange a token that came from an exchange.
 - The consent screen stays neutral: no `brand_*`. Branding goes to Delegate's
   sign-in through `delegate.brand`, as any Domain sends it.
 
@@ -53,7 +59,7 @@ Never "Account", "Audience", or "Site" in APIs or docs.
 ## Sources
 
 Write code from the specs: OAuth 2.1, RFC 8414, RFC 8707, RFC 9728, RFC 7591,
-RFC 7009, RFC 8252, the Client ID Metadata Document draft, and the MCP
+RFC 7009, RFC 8252, RFC 8693 (token exchange), RFC 9396 (authorization details), the Client ID Metadata Document draft, and the MCP
 authorization spec (2026-07-28). engine9 owns `server`, so copying from it
 is allowed, but its OAuth code predates these rules; build fresh. Do not copy
 from `delegate`.

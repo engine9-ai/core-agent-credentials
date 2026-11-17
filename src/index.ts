@@ -7,7 +7,7 @@ export {
   redirectUriProblem,
 } from './clients';
 export type { ResolvedClient } from './clients';
-export { ACCESS_TOKEN_PREFIX, REFRESH_TOKEN_PREFIX } from './tokens';
+export { ACCESS_TOKEN_PREFIX, ACCESS_TOKEN_TYPE, REFRESH_TOKEN_PREFIX, TOKEN_EXCHANGE_GRANT } from './tokens';
 export { memoryStore } from './stores/memory';
 export { agentCredentialTablesSql, d1Executor, sqlStore } from './stores/sql';
 export type { SqlExecutor } from './stores/sql';
@@ -18,6 +18,8 @@ export type {
   AgentCredentialStore,
   AgentIdentity,
   AuthenticateResult,
+  AuthorizationDetail,
+  AuthorizationDetailsHandler,
   Connection,
   DelegateSignInOptions,
   FetchLike,
@@ -27,4 +29,7 @@ export type {
   RefreshRecord,
   RegisteredClient,
   RegistrationOptions,
+  TokenExchangeRequest,
+  TokenExchangeResponse,
+  TokenExchangeResult,
 } from './types';

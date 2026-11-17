@@ -66,6 +66,32 @@ export interface AgentCredentialsOptions {
   now?: () => number;
   /** Connection lifecycle events, for the host's audit log. */
   onEvent?: (event: AgentCredentialEvent) => void | Promise<void>;
+  /**
+   * RFC 9396 `authorization_details` types an Agent may ask for in a token exchange (RFC 8693), keyed by `type`.
+   * Turns on the token-exchange grant. Your host approves each detail with a person; this library only carries it.
+   */
+  authorizationDetails?: Record<string, AuthorizationDetailsHandler>;
+}
+
+/** One RFC 9396 authorization detail. `type` names it; the other members are your host's. */
+export interface AuthorizationDetail {
+  type: string;
+  [member: string]: unknown;
+}
+
+/**
+ * Your host's side of one `authorization_details` type. The library never decides what a detail allows: you
+ * approved it with a person, and you say whether that approval still stands.
+ */
+export interface AuthorizationDetailsHandler {
+  /**
+   * Whether a person's approval of `detail`, for this Agent and person, stands now, and until when (Unix
+   * seconds). Null refuses it. Called on the token exchange and again on every `authenticate`, so ending the
+   * approval in your host ends every token that carries it.
+   */
+  check(detail: AuthorizationDetail, credential: AgentCredential): Promise<number | null> | number | null;
+  /** The Agent revoked a token carrying `detail` (RFC 7009): end the approval. Without it, revoking does nothing. */
+  revoke?(detail: AuthorizationDetail, credential: AgentCredential): Promise<void> | void;
 }
 
 /** The Identity Token claims kept for a Connection. Who the person is, never what they may do. */
@@ -156,7 +182,39 @@ export interface AgentCredential {
   connectedAt: number;
   /** Unix seconds. When this access token expires. */
   expiresAt: number;
+  /**
+   * Set only on a token from a token exchange: the details a person approved in your host, each checked again
+   * just now. Allow what they describe and nothing else.
+   */
+  authorizationDetails?: AuthorizationDetail[];
 }
+
+/** The token-exchange request (RFC 8693) that `exchangeToken` and `POST {basePath}/token` take. */
+export interface TokenExchangeRequest {
+  /** The Agent Credential's access token (`e9agent_…`). */
+  subjectToken: string;
+  /** Where the new token is used (RFC 8707). One of `resources`. */
+  resource: string;
+  authorizationDetails: AuthorizationDetail[];
+  /** Space separated. Default: the subject token's scopes. Never more. */
+  scope?: string;
+  /** When given, must be the subject token's Agent. */
+  clientId?: string;
+}
+
+/** The token response (RFC 8693 section 2.2). There is no refresh token: exchange again for a new one. */
+export interface TokenExchangeResponse {
+  access_token: string;
+  issued_token_type: 'urn:ietf:params:oauth:token-type:access_token';
+  token_type: 'Bearer';
+  expires_in: number;
+  scope: string;
+  authorization_details: AuthorizationDetail[];
+}
+
+export type TokenExchangeResult =
+  | { ok: true; token: TokenExchangeResponse }
+  | { ok: false; error: 'invalid_request' | 'invalid_grant' | 'invalid_target' | 'invalid_scope' | 'invalid_authorization_details' | 'unsupported_grant_type'; description: string };
 
 export type AuthenticateResult =
   | { ok: true; credential: AgentCredential }
@@ -169,6 +227,8 @@ export type AuthenticateResult =
        * another resource.
        */
       error: 'missing' | 'other_credential' | 'invalid_token';
+      /** Why an `invalid_token` was refused, in plain words (also in `WWW-Authenticate`). */
+      description?: string;
       /** A 401 with `WWW-Authenticate` that points the Agent at sign-in. */
       response: Response;
     };

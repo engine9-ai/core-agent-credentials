@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.2.0
+
+Token exchange for time-boxed access a person approved in the host.
+
+- **`authorizationDetails` option**: RFC 9396 detail types the host approves, each with `check(detail,
+  credential)` (until when the approval stands, or null) and an optional `revoke`. Setting it turns on the
+  RFC 8693 token-exchange grant at `/oauth/token` and advertises it, with `authorization_details_types_supported`.
+- **`exchangeToken()`**: the same exchange without HTTP, for a host that holds the Agent's access token.
+- Exchanged tokens are ordinary `e9agent_` access tokens for one resource, carrying `authorization_details`:
+  no refresh token, never more scopes, never past the access token lifetime, the Connection or the approval,
+  and never exchanged again. `check` runs again on every `authenticate`.
+- `authenticate` returns `credential.authorizationDetails`, and `description` on an `invalid_token` failure.
+- Revoking an exchanged token (RFC 7009) calls the host's `revoke` and leaves the Connection alone.
+
+| What a site changes | |
+| --- | --- |
+| Nothing | Without `authorizationDetails`, nothing changes |
+
 ## 1.1.0
 
 Connecting from a phone no longer fails with "opened in a different browser, or it took too long".

@@ -1,8 +1,11 @@
 import { decodeJson, encodeJson, hmacSign, hmacVerify, randomToken, sha256Hex } from './crypto';
-import type { AgentIdentity } from './types';
+import type { AgentIdentity, AuthorizationDetail } from './types';
 
 /** Access tokens start with this. Grep for it to find a leaked one. */
 export const ACCESS_TOKEN_PREFIX = 'e9agent_';
+/** RFC 8693 grant type and token type URIs. */
+export const TOKEN_EXCHANGE_GRANT = 'urn:ietf:params:oauth:grant-type:token-exchange';
+export const ACCESS_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:access_token';
 /** Refresh tokens start with this. */
 export const REFRESH_TOKEN_PREFIX = 'e9agentrefresh_';
 
@@ -20,6 +23,8 @@ export interface AccessTokenPayload {
   connected_at: number;
   iat: number;
   exp: number;
+  /** Only on a token from a token exchange (RFC 8693, RFC 9396). */
+  authorization_details?: AuthorizationDetail[];
 }
 
 export function isAccessToken(token: string): boolean {

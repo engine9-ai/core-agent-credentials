@@ -168,6 +168,7 @@ for it at once.
 | `refreshTokenTtlSeconds` | 30 days | Never past the Connection's end. |
 | `connectionMaxAgeSeconds` | 90 days | Signing in again restarts it. |
 | `onEvent` | | `connection.created`, `connection.updated`, `connection.revoked`, for your audit log. |
+| `authorizationDetails` | none | RFC 9396 detail types, `{ [type]: { check, revoke? } }`. Turns on [token exchange](#token-exchange-time-boxed-access-a-person-approved). |
 
 ## Endpoints
 
@@ -179,8 +180,8 @@ for it at once.
 | GET | `/oauth/callback` | Delegate returns here |
 | GET | `/oauth/resume` | "Continue in this browser": restarts an attempt that came back to another browser |
 | POST | `/oauth/consent` | The consent screen posts here |
-| POST | `/oauth/token` | `authorization_code`, `refresh_token` |
-| POST | `/oauth/revoke` | RFC 7009. Ends the Connection. |
+| POST | `/oauth/token` | `authorization_code`, `refresh_token`, and token exchange (RFC 8693) when `authorizationDetails` is set |
+| POST | `/oauth/revoke` | RFC 7009. Ends the Connection; for a token from an exchange, ends only the approval it carries. |
 | POST | `/oauth/register` | RFC 7591, only with `registration.dynamic` |
 
 There is no OpenID Connect discovery and no `id_token`.
@@ -212,7 +213,66 @@ Loopback redirects may use any port (RFC 8252).
   issues a new one. Presenting a used one ends the Connection (OAuth 2.1
   §4.3.1), because two parties hold it.
 
+- **Exchanged access token**: the same format, bound to the resource it was
+  exchanged for, with `authorization_details` in the payload. No refresh
+  token.
+
 Grep your repositories and logs for `e9agent_` the way you grep for `e9key_`.
+
+## Token exchange: time-boxed access a person approved
+
+Sometimes an Agent needs something narrower and shorter than its Connection,
+that a person approved in your host for a while: reveal two secrets for 30
+minutes while it debugs, say. The standard shape is OAuth 2.0 Token Exchange
+(RFC 8693) carrying Rich Authorization Requests `authorization_details`
+(RFC 9396). This library carries the details; your host approves them.
+
+1. Your host records the approval its own way (a request page, a person who
+   clicks Approve) and names a detail type for it:
+
+   ```js
+   createAgentCredentials({
+     // …
+     resources: ['https://www.example.com/mcp', 'https://www.example.com/v1'],
+     authorizationDetails: {
+       access_window: {
+         // Until when (Unix seconds) the approval stands for this person and Agent, or null.
+         check: async (detail, credential) => windows.until(detail.window, credential.identity.sub, credential.clientId),
+         revoke: async (detail) => windows.end(detail.window), // optional: the Agent revoked the token
+       },
+     },
+   });
+   ```
+
+2. The Agent (or your host, holding the Agent's access token from an MCP
+   request) exchanges its Agent Credential:
+
+   ```
+   POST /oauth/token
+   grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+   &subject_token=e9agent_…&subject_token_type=urn:ietf:params:oauth:token-type:access_token
+   &resource=https://www.example.com/v1
+   &authorization_details=[{"type":"access_window","window":"7f3c…"}]
+   ```
+
+   or, in your host, `agents.exchangeToken({ subjectToken, resource, authorizationDetails })`.
+
+3. It gets `{ access_token, issued_token_type, token_type: "Bearer", expires_in, scope, authorization_details }`.
+   `authenticate(request, resource)` returns `credential.authorizationDetails`; allow what they describe.
+
+The rules:
+
+- `check` runs on the exchange **and on every `authenticate`**, so ending the
+  approval in your host ends the token at once. Revoking the Connection does too.
+- A token never lasts past `accessTokenTtlSeconds`, the Connection, or the
+  approval, and has no refresh token. Exchange again for another.
+- Never more scopes than the subject token. Only a resource in `resources`.
+- Only an Agent Credential is exchanged; a token from an exchange cannot be
+  exchanged again. No `actor_token`, and only access tokens are issued.
+- At most 10 details and 2 KB, with a `type` you named. The rest of each
+  detail is yours to check.
+- Revoking an exchanged token (RFC 7009) calls `revoke` and leaves the
+  Connection alone.
 
 ## Storage
 
