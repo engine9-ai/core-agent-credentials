@@ -26,6 +26,7 @@ export type {
   PendingKind,
   PendingRecord,
   PreRegisteredAgent,
+  TrustedAgent,
   RefreshRecord,
   RegisteredClient,
   RegistrationOptions,

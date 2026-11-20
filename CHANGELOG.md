@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.0
+
+- **`registration.trustedAgents`** replaces `registration.clients` (still read) for Agents the host vouches
+  for. "Client" read like a customer; these are apps. Type `TrustedAgent` (`PreRegisteredAgent` is an alias).
+- **Plainer consent screen.** The heading names a self-registered app as it named itself ("Engine9 Conductor
+  wants to act as you…"), not "An app calling itself …"; the warning below it still says no one confirmed it.
+  The "This lasts until you disconnect the agent…" line is gone.
+
+| What a site changes | |
+| --- | --- |
+| Nothing | `clients` still works; rename it to `trustedAgents` when convenient |
+
 ## 1.2.0
 
 Token exchange for time-boxed access a person approved in the host.

@@ -2,13 +2,20 @@ import type { IdentityAuth, IdentityFields, Jwks, LoginProviders, SignInBrand } 
 
 export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
-/** An Agent the host lists in configuration (no metadata document, no registration). */
-export interface PreRegisteredAgent {
+/**
+ * An Agent the host vouches for in configuration (no metadata document, no
+ * registration), such as the host's own apps. The consent screen shows its
+ * name with no "unverified" warning. The person is still asked to approve it.
+ */
+export interface TrustedAgent {
   client_id: string;
   /** Shown on the consent screen. The host vouches for it. */
   client_name: string;
   redirect_uris: string[];
 }
+
+/** @deprecated Renamed `TrustedAgent`. */
+export type PreRegisteredAgent = TrustedAgent;
 
 export interface DelegateSignInOptions {
   /** Delegate base URL. Default `https://delegate.network`. */
@@ -27,8 +34,10 @@ export interface DelegateSignInOptions {
 }
 
 export interface RegistrationOptions {
-  /** Agents the host lists itself. */
-  clients?: PreRegisteredAgent[];
+  /** Agents the host vouches for: its own apps, or ones it has checked. */
+  trustedAgents?: TrustedAgent[];
+  /** @deprecated Renamed `trustedAgents`. Both are read. */
+  clients?: TrustedAgent[];
   /** Accept an https `client_id` that serves a Client ID Metadata Document. Default true. */
   metadataDocuments?: boolean;
   /** Serve `POST {basePath}/register` (RFC 7591). Deprecated in MCP 2026-07-28. Default false. */

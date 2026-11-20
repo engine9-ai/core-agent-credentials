@@ -83,7 +83,7 @@ export function setup(overrides: Partial<AgentCredentialsOptions> = {}): Harness
     store,
     scopes: { 'people:read': 'See people and their history', 'people:write': 'Add and change people' },
     delegate: { jwks: JWKS },
-    registration: { clients: [{ client_id: CLI_ID, client_name: 'engine9 CLI', redirect_uris: [CLI_REDIRECT] }] },
+    registration: { trustedAgents: [{ client_id: CLI_ID, client_name: 'engine9 CLI', redirect_uris: [CLI_REDIRECT] }] },
     fetch: async (input) => {
       const url = String(input);
       fetched.push(url);

@@ -211,18 +211,19 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
   const exchangeOn = detailTypes.length > 0;
   const metadataDocuments = options.registration?.metadataDocuments ?? true;
 
-  for (const client of options.registration?.clients ?? []) {
-    if (client.client_id.startsWith(DYNAMIC_CLIENT_PREFIX) || client.client_id.startsWith('https:')) {
-      throw new Error(`pre-registered client_id ${client.client_id} must not look like a dynamic or metadata client_id`);
+  const trustedAgents = [...(options.registration?.trustedAgents ?? []), ...(options.registration?.clients ?? [])];
+  for (const agent of trustedAgents) {
+    if (agent.client_id.startsWith(DYNAMIC_CLIENT_PREFIX) || agent.client_id.startsWith('https:')) {
+      throw new Error(`trusted agent client_id ${agent.client_id} must not look like a dynamic or metadata client_id`);
     }
-    for (const uri of client.redirect_uris) {
+    for (const uri of agent.redirect_uris) {
       const problem = redirectUriProblem(uri);
-      if (problem) throw new Error(`client ${client.client_id} redirect_uri ${uri} ${problem}`);
+      if (problem) throw new Error(`trusted agent ${agent.client_id} redirect_uri ${uri} ${problem}`);
     }
   }
 
   const resolver = createClientResolver({
-    clients: options.registration?.clients ?? [],
+    trustedAgents,
     metadataDocuments,
     dynamic,
     store,
@@ -556,7 +557,6 @@ export function createAgentCredentials(options: AgentCredentialsOptions): AgentC
       })),
       flowId,
       action: endpoint('consent'),
-      maxAgeDays: Math.round(maxAge / 86400),
       resumed: Boolean(flow.resumed),
     });
     return html(page, 200, [bindFlow(request, flowId, state)]);

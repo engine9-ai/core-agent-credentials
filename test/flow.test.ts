@@ -486,13 +486,24 @@ describe('revocation endpoint', () => {
   });
 });
 
-describe('pre-registered client on loopback', () => {
+describe('trusted agent on loopback', () => {
+  it('still reads the old registration.clients name', async () => {
+    const h = setup({ registration: { clients: [{ client_id: 'old-name', client_name: 'Old App', redirect_uris: ['http://127.0.0.1/cb'] }] } });
+    const p = await pkce();
+    const s = await start(h, { code_challenge: p.challenge, client_id: 'old-name', redirect_uri: 'http://127.0.0.1:4000/cb' });
+    const html = await (await returnFromDelegate(h, s)).text();
+    expect(html).toContain('<strong>Old App</strong> wants to act as you');
+    expect(html).not.toContain('no one has confirmed');
+  });
+
   it('connects the CLI and remembers consent across ports', async () => {
     const h = setup();
     const p = await pkce();
     const s = await start(h, { code_challenge: p.challenge, client_id: CLI_ID, redirect_uri: 'http://127.0.0.1:50001/callback' });
     const page = await returnFromDelegate(h, s);
-    expect(await page.clone().text()).toContain('<strong>engine9 CLI</strong>');
+    const html = await page.clone().text();
+    expect(html).toContain('<strong>engine9 CLI</strong> wants to act as you');
+    expect(html).not.toContain('no one has confirmed');
     const res = await h.agents.handle(
       post(
         '/oauth/consent',

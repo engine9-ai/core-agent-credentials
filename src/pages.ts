@@ -18,7 +18,6 @@ label small{display:block;color:#666;font-family:ui-monospace,monospace;font-siz
 .actions{display:flex;gap:.75rem;justify-content:flex-end;margin-top:1.5rem}
 button,.button{font:inherit;padding:.6rem 1.2rem;border-radius:8px;border:1px solid #bbb;background:#fff;color:#1d1d1f;cursor:pointer;text-decoration:none;display:inline-block;-webkit-appearance:none;appearance:none}
 button[value=allow],.button.primary{background:#1d1d1f;color:#fff;border-color:#1d1d1f}
-.fine{color:#666;font-size:.85rem;margin-top:1.5rem}
 `;
 
 function page(title: string, body: string): string {
@@ -50,7 +49,7 @@ function describeAgent(client: ResolvedClient, redirectUri: string): { name: str
     const name = client.client_name && client.client_name !== host ? `${escapeHtml(client.client_name)} from ` : '';
     return { name: `<strong>${name}${escapeHtml(host)}</strong>`, warning: null };
   }
-  const label = client.client_name ? `An app calling itself “${escapeHtml(client.client_name)}”` : 'An app';
+  const label = client.client_name ? escapeHtml(client.client_name) : 'An app';
   return {
     name: `<strong>${label}</strong>`,
     warning: `This app registered itself, so no one has confirmed who made it. Its access will go to <strong>${escapeHtml(
@@ -67,7 +66,6 @@ export interface ConsentPageInput {
   scopes: Array<{ name: string; description: string; isNew: boolean }>;
   flowId: string;
   action: string;
-  maxAgeDays: number;
   /** The flow was started in another browser or tab and continued here (see `resume`). */
   resumed?: boolean;
 }
@@ -106,7 +104,6 @@ ${input.resumed ? `<p class="warn">This connection was started in another browse
 <fieldset><legend>It will be able to</legend>${scopes}</fieldset>
 <p>${domain} still checks what your own access allows on every request, so the agent can never do more than you can.</p>
 <div class="actions"><button type="submit" name="decision" value="deny">Cancel</button><button type="submit" name="decision" value="allow">Allow</button></div>
-</form>
-<p class="fine">This lasts until you disconnect the agent, or for up to ${input.maxAgeDays} days, whichever is first.</p>`,
+</form>`,
   );
 }

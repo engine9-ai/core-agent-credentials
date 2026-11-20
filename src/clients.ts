@@ -1,4 +1,4 @@
-import type { AgentCredentialStore, FetchLike, PreRegisteredAgent } from './types';
+import type { AgentCredentialStore, FetchLike, TrustedAgent } from './types';
 
 /** Dynamic Client Registration ids start with this, so they never collide with a URL or a listed id. */
 export const DYNAMIC_CLIENT_PREFIX = 'e9client_';
@@ -9,7 +9,7 @@ export interface ResolvedClient {
   client_name: string | null;
   redirect_uris: string[];
   /**
-   * `registered`: listed by the host. `metadata`: a Client ID Metadata Document;
+   * `registered`: one of the host's `trustedAgents`. `metadata`: a Client ID Metadata Document;
    * its host served the document, so the host is verified. `dynamic`: registered
    * itself through `/register`; nothing about it is verified.
    */
@@ -91,21 +91,21 @@ export interface ClientResolver {
 }
 
 export function createClientResolver({
-  clients,
+  trustedAgents,
   metadataDocuments,
   dynamic,
   store,
   fetchImpl,
   now,
 }: {
-  clients: PreRegisteredAgent[];
+  trustedAgents: TrustedAgent[];
   metadataDocuments: boolean;
   dynamic: boolean;
   store: AgentCredentialStore;
   fetchImpl: FetchLike;
   now: () => number;
 }): ClientResolver {
-  const listed = new Map(clients.map((c) => [c.client_id, c]));
+  const listed = new Map(trustedAgents.map((c) => [c.client_id, c]));
   const cache = new Map<string, { client: ResolvedClient; until: number }>();
 
   async function fetchMetadata(clientId: string): Promise<{ client: ResolvedClient } | { problem: string }> {

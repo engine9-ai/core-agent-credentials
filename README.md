@@ -23,7 +23,7 @@ is and never mints roles.
 3. The agent opens `/oauth/authorize` with PKCE S256 and `resource` (RFC 8707).
    The library identifies the agent:
    - its Client ID Metadata Document, preferred in MCP 2026-07-28;
-   - a client you list in configuration;
+   - a trusted agent you list in configuration;
    - or Dynamic Client Registration, if you turn it on.
 
    The `redirect_uri` must exactly match one the agent registered. If it
@@ -162,7 +162,7 @@ for it at once.
 | `scopes` | required | Every scope an agent may hold, in plain words. Do not list `admin` unless you mean it. |
 | `defaultScopes` | all scopes | Used when the agent asks for none. |
 | `delegate` | | `url`, `minLevel` (3), `fields` (`['email']`), `optionalFields`, `loginLevel`, `loginProviders`, `brand`. |
-| `registration` | | `clients` (listed agents), `metadataDocuments` (true), `dynamic` (false). |
+| `registration` | | `trustedAgents` (agents you vouch for), `metadataDocuments` (true), `dynamic` (false). |
 | `basePath` | `/oauth` | |
 | `accessTokenTtlSeconds` | 3600 | |
 | `refreshTokenTtlSeconds` | 30 days | Never past the Connection's end. |
@@ -193,8 +193,11 @@ There is no OpenID Connect discovery and no `id_token`.
   The document is fetched with a 5-second timeout and a 10 KB limit, cached
   for 10 minutes. Local hosts and IP addresses are refused. On Node, also
   block private networks at your egress if agents could point at them.
-- **Listed clients**: `registration.clients`. Their `client_name` is shown as
-  you wrote it.
+- **Trusted agents**: `registration.trustedAgents`, for your own apps or ones
+  you have checked. Each has a fixed `client_id`, a `client_name` shown as you
+  wrote it with no warning, and its `redirect_uris`. The person still
+  approves it on the consent screen. (`registration.clients` is the old name
+  and still works.)
 - **Dynamic Client Registration** (off by default; deprecated in MCP
   2026-07-28). Turn it on for agents that still need it. Anyone can register,
   so the consent screen says the app is unverified and shows where its

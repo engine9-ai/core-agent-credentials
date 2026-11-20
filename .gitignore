@@ -2,3 +2,15 @@ node_modules
 dist
 *.log
 .DS_Store
+
+# Temporary files from tools, editors and merges
+.tmp_*/
+.tmp/
+*.tmp
+*.orig
+*.rej
+*.swp
+*~
+.eslintcache
+.claude/settings.local.json
+.claude/worktrees/
